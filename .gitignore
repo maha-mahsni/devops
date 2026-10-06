@@ -1,0 +1,10 @@
+# Builds
+backend/target/
+frontend/dist/
+frontend/node_modules/
+frontend/.angular/
+# Secrets
+.env
+# IDE
+.idea/
+*.iml
