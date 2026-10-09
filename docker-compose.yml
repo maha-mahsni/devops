@@ -1,0 +1,80 @@
+name: gestion-projets   # meme projet Compose en manuel et depuis Jenkins
+
+services:
+  mysql-db:
+    image: mysql:8.0
+    container_name: mysql-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql          # volume persistant
+    networks: [devops-net]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: ${DOCKERHUB_USER}/${IMAGE_PREFIX}-backend:${TAG:-latest}
+    container_name: backend
+    restart: unless-stopped
+    depends_on:
+      mysql-db:
+        condition: service_healthy         # attend que MySQL reponde vraiment
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql-db:3306/${MYSQL_DATABASE}?createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+    ports: ["8089:8080"]                   # 8080 est deja pris par Jenkins
+    networks: [devops-net]
+
+  frontend:
+    image: ${DOCKERHUB_USER}/${IMAGE_PREFIX}-frontend:${TAG:-latest}
+    container_name: frontend
+    restart: unless-stopped
+    depends_on: [backend]
+    ports: ["4200:80"]
+    networks: [devops-net]
+
+  adminer:
+    image: adminer
+    container_name: adminer-ui
+    restart: unless-stopped
+    depends_on: [mysql-db]
+    ports: ["8082:8080"]
+    networks: [devops-net]
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports: ["9090:9090"]
+    networks: [devops-net]
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus]
+    ports: ["3000:3000"]
+    networks: [devops-net]
+
+networks:
+  devops-net:                              # reseau dedie
+
+volumes:
+  mysql-data:
+  prometheus-data:
+  grafana-data:
