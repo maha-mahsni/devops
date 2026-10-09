@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     tools {
-        jdk   'JAVA_HOME'
+        jdk   'JAVA_HOME'   // noms declares dans Administrer Jenkins > Tools
         maven 'M2_HOME'
     }
 
@@ -10,6 +10,12 @@ pipeline {
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
         disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
+    environment {
+        // Configuration et secrets hors Git (cree par scripts/init-env.sh dans la VM)
+        ENV_FILE = '/opt/gestion-projets/.env'
     }
 
     stages {
@@ -17,7 +23,7 @@ pipeline {
             steps { checkout scm }
         }
 
-        stage('Build & Tests') {
+        stage('Build & Tests') {                       // etape 3
             steps {
                 dir('backend') { sh 'mvn -B clean verify' }
             }
@@ -27,7 +33,7 @@ pipeline {
             }
         }
 
-        stage('SonarQube') {
+        stage('SonarQube') {                           // etape 5
             steps {
                 dir('backend') {
                     withSonarQubeEnv('SonarQube') {
@@ -44,10 +50,64 @@ pipeline {
                 }
             }
         }
+
+        stage('Docker Build') {                        // etape 7
+            steps {
+                sh '''
+                  set -a; . "$ENV_FILE"; set +a
+                  docker build -t $DOCKERHUB_USER/$IMAGE_PREFIX-backend:$BUILD_NUMBER \
+                               -t $DOCKERHUB_USER/$IMAGE_PREFIX-backend:latest backend
+                  docker build -t $DOCKERHUB_USER/$IMAGE_PREFIX-frontend:$BUILD_NUMBER \
+                               -t $DOCKERHUB_USER/$IMAGE_PREFIX-frontend:latest frontend
+                '''
+            }
+        }
+
+        stage('Docker Push') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                                  usernameVariable: 'DH_USER',
+                                                  passwordVariable: 'DH_TOKEN')]) {
+                    sh '''
+                      set -a; . "$ENV_FILE"; set +a
+                      echo "$DH_TOKEN" | docker login -u "$DH_USER" --password-stdin
+                      for svc in backend frontend; do
+                        docker push $DOCKERHUB_USER/$IMAGE_PREFIX-$svc:$BUILD_NUMBER
+                        docker push $DOCKERHUB_USER/$IMAGE_PREFIX-$svc:latest
+                      done
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh '''
+                  TAG=$BUILD_NUMBER docker compose --env-file "$ENV_FILE" up -d --remove-orphans
+                  TAG=$BUILD_NUMBER docker compose --env-file "$ENV_FILE" ps
+                '''
+            }
+        }
+
+        stage('Smoke test') {
+            steps {
+                sh '''
+                  for i in $(seq 1 30); do
+                    curl -fs http://localhost:8089/actuator/health && exit 0
+                    sleep 5
+                  done
+                  echo "Le backend ne repond pas apres 150 s"; exit 1
+                '''
+            }
+        }
     }
 
     post {
-        success { echo "Build #${env.BUILD_NUMBER} OK : tests + SonarQube + Quality Gate" }
+        always {
+            sh 'docker logout || true'
+            sh 'docker image prune -f || true'
+        }
+        success { echo "Version ${env.BUILD_NUMBER} livree : http://192.168.33.10:4200" }
         failure { echo 'Echec : ouvre la Console Output du stage en rouge.' }
     }
 }

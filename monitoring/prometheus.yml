@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: spring-backend               # metriques JVM, HTTP, base de donnees
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['backend:8080']          # nom du service Compose
+
+  - job_name: jenkins                      # plugin Jenkins "Prometheus metrics"
+    metrics_path: /prometheus/
+    static_configs:
+      - targets: ['192.168.33.10:8080']
